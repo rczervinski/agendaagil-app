@@ -1,0 +1,7 @@
+IDs para teste:
+
+Doctor ID: cmehozzs80002w3e3jybw0a3a
+Tenant ID: cmehozzry0000w3e31mouw8qq
+Email: dr.joao@clinicasilva.com.br
+
+Para testar, use estes IDs no frontend.

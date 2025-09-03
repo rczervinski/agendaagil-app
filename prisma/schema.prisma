@@ -1,0 +1,657 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================
+// 🏢 MULTI-TENANT ARCHITECTURE
+// Todos os dentistas compartilham o mesmo banco
+// Separação por tenantId em cada tabela
+// =====================================================
+
+// 🏢 Tenant (Organização/Clínica)
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String   // Nome da clínica
+  slug        String   @unique // URL amigável: clinica-silva
+  cnpj        String?
+  address     String?
+  city        String?
+  state       String?
+  zipCode     String?
+  phone       String?
+  whatsapp    String?
+  email       String?
+  website     String?
+  logo        String?
+  description String?
+  
+  // Subscription info
+  plan        SubscriptionPlan @default(TRIAL)
+  status      TenantStatus     @default(ACTIVE)
+  trialEnds   DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  users           User[]
+  doctorPatients  DoctorPatient[]
+  appointments    Appointment[]
+  settings        TenantSettings?
+  subscription    Subscription?
+  messages        WhatsAppMessage[]
+  templates       MessageTemplate[]
+  authCodes       AuthCode[]
+  procedures      Procedure[]
+  
+  @@map("tenants")
+}
+
+// 👨‍⚕️ User (Dentistas e funcionários)
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  firstName String
+  lastName  String
+  phone     String
+  role      UserRole @default(DOCTOR)
+  
+  // Professional info
+  cro         String?
+  specialties String[] // Array de especialidades
+  avatar      String?
+  
+  // Multi-tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  appointments    Appointment[]
+  patientMessages WhatsAppMessage[]
+  doctorPatients  DoctorPatient[]
+  doctorClinics   DoctorClinic[]
+  
+  @@map("users")
+}
+
+// 👤 Patient (Pacientes únicos na plataforma)
+model Patient {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String   @unique // Único em toda plataforma
+  cpf       String?  @unique // Único em toda plataforma
+  
+  // Dados básicos (sempre visíveis)
+  birthDate DateTime?
+  gender    Gender?
+  
+  // WhatsApp integration
+  whatsappId    String? // ID do WhatsApp Business
+  lastContact   DateTime?
+  contactSource ContactSource @default(MANUAL)
+  
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  doctorPatients DoctorPatient[] // Relacionamentos com médicos
+  messages       WhatsAppMessage[]
+  
+  @@map("patients")
+}
+
+// 🏥 DoctorPatient (Ficha específica por médico)
+model DoctorPatient {
+  id        String @id @default(cuid())
+  
+  // Relations
+  doctorId  String
+  doctor    User    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  
+  // Dados específicos deste médico para este paciente
+  notes            String?
+  
+  // Multi-tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  appointments      Appointment[]
+  visits           PatientVisit[]
+  clinicalRecord   PatientClinicalRecord?
+  anamnesis        PatientAnamnesis?
+  formToken        PatientFormToken?
+  teeth            PatientTeeth[]
+  
+  // Um relacionamento único por médico/paciente
+  @@unique([doctorId, patientId])
+  @@map("doctor_patients")
+}
+
+// 📅 Appointment (Consultas)
+model Appointment {
+  id       String    @id @default(cuid())
+  date     DateTime
+  duration Int       @default(30) // minutes
+  status   AppointmentStatus @default(SCHEDULED)
+  type     String    @default("consultation")
+  notes    String?
+  price    Float?  // Valor da consulta
+  
+  // Scheduling info
+  reminderSent    Boolean @default(false)
+  confirmationSent Boolean @default(false)
+  
+  
+  // Multi-tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  // Relations
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doctorPatientId  String
+  doctorPatient    DoctorPatient @relation(fields: [doctorPatientId], references: [id], onDelete: Cascade)
+  visit            PatientVisit?
+  teeth            PatientTeeth[]
+
+  // Clinic relation (optional)
+  clinicId String?
+  clinic   Clinic? @relation(fields: [clinicId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("appointments")
+}
+
+// 🏥 PatientVisit (Histórico de visitas)
+model PatientVisit {
+  id        String   @id @default(cuid())
+  date      DateTime
+  diagnosis String?
+  treatment String?
+  notes     String?
+  nextVisit DateTime?
+  
+  // Multi-tenant
+  tenantId String
+  
+  // Relations
+  doctorPatientId String
+  doctorPatient   DoctorPatient @relation(fields: [doctorPatientId], references: [id], onDelete: Cascade)
+  appointmentId   String        @unique
+  appointment     Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("patient_visits")
+}
+
+// 🏥 Clinic (Clínicas/Consultórios)
+model Clinic {
+  id          String @id @default(cuid())
+  name        String
+  address     String?
+  phone       String?
+  email       String?
+  description String?
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  doctorClinics DoctorClinic[]
+  appointments  Appointment[]
+
+  @@map("clinics")
+}
+
+// 👨‍⚕️ DoctorClinic (Relacionamento médico-clínica)
+model DoctorClinic {
+  id       String @id @default(cuid())
+  doctorId String
+  clinicId String
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  doctor   User   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, clinicId])
+  @@map("doctor_clinics")
+}
+
+// ⚙️ TenantSettings (Configurações da clínica)
+model TenantSettings {
+  id       String @id @default(cuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  // Working hours
+  workingDays        String[] @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
+  workingHoursStart  String   @default("08:00")
+  workingHoursEnd    String   @default("18:00")
+  lunchBreakStart    String   @default("12:00")
+  lunchBreakEnd      String   @default("13:00")
+  
+  // Appointment settings
+  defaultDuration    Int     @default(30)
+  slotInterval       Int     @default(15)  // Duration of each calendar slot in minutes
+  enableLunchBreak   Boolean @default(true) // Whether lunch break is enabled
+  advanceBookingDays Int     @default(30)
+  allowOnlineBooking Boolean @default(true)
+  
+  // WhatsApp settings
+  whatsappEnabled      Boolean @default(false)
+  whatsappNumber       String?
+  autoReplyEnabled     Boolean @default(true)
+  welcomeMessage       String?
+  outOfHoursMessage    String?
+  reminderEnabled      Boolean @default(true)
+  reminderHoursBefore  Int     @default(24)
+  
+  // Notification settings
+  emailNotifications Boolean @default(true)
+  smsNotifications   Boolean @default(false)
+  pushNotifications  Boolean @default(true)
+  
+  // Dental settings
+  toothNumberingSystem String @default("FDI") // "FDI" or "UNIVERSAL"
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("tenant_settings")
+}
+
+// 📱 WhatsAppMessage (Mensagens WhatsApp)
+model WhatsAppMessage {
+  id        String      @id @default(cuid())
+  messageId String?     // ID da mensagem no WhatsApp
+  direction MessageDirection
+  content   String
+  type      MessageType @default(TEXT)
+  status    MessageStatus @default(SENT)
+  
+  // Multi-tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  // Relations
+  patientId String?
+  patient   Patient? @relation(fields: [patientId], references: [id])
+  userId    String?  // Dentista que respondeu
+  user      User?    @relation(fields: [userId], references: [id])
+  
+  sentAt    DateTime @default(now())
+  createdAt DateTime @default(now())
+  
+  @@map("whatsapp_messages")
+}
+
+// 📝 MessageTemplate (Templates de mensagem)
+model MessageTemplate {
+  id       String @id @default(cuid())
+  name     String
+  content  String
+  category TemplateCategory
+  
+  // Multi-tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("message_templates")
+}
+
+// 💳 Subscription (Assinaturas)
+model Subscription {
+  id       String @id @default(cuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  plan           SubscriptionPlan
+  status         SubscriptionStatus
+  amount         Float
+  currency       String             @default("BRL")
+  billingCycle   BillingCycle       @default(MONTHLY)
+  
+  // Payment info
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  paymentMethodId      String?
+  
+  // Billing dates
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAt           DateTime?
+  canceledAt         DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("subscriptions")
+}
+
+// =================== ENUMS ===================
+
+enum UserRole {
+  ADMIN     // Super admin do sistema
+  OWNER     // Dono da clínica
+  DOCTOR    // Dentista
+  ASSISTANT // Assistente/secretária
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum ContactSource {
+  MANUAL    // Cadastrado manualmente
+  WHATSAPP  // Veio pelo WhatsApp
+  WEBSITE   // Se cadastrou no site
+  REFERRAL  // Indicação
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  RESCHEDULED
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  TRIAL
+}
+
+enum SubscriptionPlan {
+  TRIAL
+  BASIC
+  PROFESSIONAL
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  PAST_DUE
+  UNPAID
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum MessageDirection {
+  INBOUND   // Cliente para nós
+  OUTBOUND  // Nós para cliente
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+  TEMPLATE
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum TemplateCategory {
+  WELCOME
+  APPOINTMENT_CONFIRMATION
+  APPOINTMENT_REMINDER
+  APPOINTMENT_CANCELLATION
+  OUT_OF_HOURS
+  CUSTOM
+}
+
+// 🔐 AuthCode (Códigos de autenticação)
+model AuthCode {
+  id        String   @id @default(cuid())
+  code      String   // 6-digit code
+  phone     String   // Phone number
+  userType  UserType @default(PATIENT)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+
+  // Multi-tenant
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("auth_codes")
+}
+
+enum UserType {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+
+// 🦷 Procedure (Procedimentos dentários)
+model Procedure {
+  id          String  @id @default(cuid())
+  name        String  // Nome do procedimento
+  description String? // Descrição opcional
+  duration    Int     // Duração em minutos
+  price       Float?  // Preço padrão (opcional)
+  isActive    Boolean @default(true)
+  
+  // Multi-tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  teeth PatientTeeth[]
+  
+  @@map("procedures")
+}
+
+// 🏥 PatientClinicalRecord (Ficha Clínica)
+model PatientClinicalRecord {
+  id        String @id @default(cuid())
+  
+  // Dados pessoais
+  name              String?
+  rg                String?
+  cpf               String?
+  issuingOrgan      String?
+  birthDate         DateTime?
+  nationality       String?
+  maritalStatus     String?
+  profession        String?
+  phone             String?
+  email             String?
+  address           String?
+  addressNumber     String?
+  neighborhood      String?
+  zipCode           String?
+  
+  // Responsável (menor de idade)
+  guardianName         String?
+  guardianRg           String?
+  guardianCpf          String?
+  guardianIssuingOrgan String?
+  guardianMaritalStatus String?
+  guardianSpouse       String?
+  
+  // Relations
+  doctorPatientId String @unique
+  doctorPatient   DoctorPatient @relation(fields: [doctorPatientId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("patient_clinical_records")
+}
+
+// 🏥 PatientAnamnesis (Ficha de Anamnese)
+model PatientAnamnesis {
+  id        String @id @default(cuid())
+  
+  // Queixa principal
+  mainComplaint String?
+  
+  // Questionário de saúde (campos booleanos)
+  hasDisease               Boolean?
+  diseaseDescription       String?
+  
+  lastDentalTreatment      String?
+  lastDentalProcedure      String?
+  hadDentalProblems        Boolean?
+  dentalProblemsDescription String?
+  
+  currentMedicalTreatment  Boolean?
+  medicalTreatmentDescription String?
+  doctorName               String?
+  doctorPhone              String?
+  
+  isPregnant               Boolean?
+  pregnancyTime            String?
+  
+  takingMedication         Boolean?
+  medicationDescription     String?
+  
+  medicationAllergy        Boolean?
+  medicationAllergyDescription String?
+  
+  hasAnyAllergy            Boolean?
+  allergyDescription       String?
+  
+  hadSurgery               Boolean?
+  surgeryDescription       String?
+  
+  healingProblems          Boolean?
+  anesthesiaProblems       Boolean?
+  hemorrhageProblems       Boolean?
+  
+  // Doenças (múltipla escolha)
+  rheumaticFever           Boolean @default(false)
+  heartProblems            Boolean @default(false)
+  respiratoryProblems      Boolean @default(false)
+  allergicProblems         Boolean @default(false)
+  kidneyProblems           Boolean @default(false)
+  jointProblems            Boolean @default(false)
+  diabetesType1            Boolean @default(false)
+  diabetesType2            Boolean @default(false)
+  hypertension             Boolean @default(false)
+  
+  // Outras doenças
+  otherDiseases            String?
+  
+  // Hábitos (múltipla escolha)
+  bitesNails               Boolean @default(false)
+  mouthBreathing           Boolean @default(false)
+  teethGrinding            Boolean @default(false)
+  otherHabits              String?
+  
+  // Tabagismo
+  isSmoker                 Boolean?
+  smokingDuration          String?
+  
+  // Observações
+  importantObservations    String?
+  
+  // Relations
+  doctorPatientId String @unique
+  doctorPatient   DoctorPatient @relation(fields: [doctorPatientId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("patient_anamnesis")
+}
+
+// 🔗 PatientFormToken (Tokens para preenchimento de fichas pelo paciente)
+model PatientFormToken {
+  id        String   @id @default(cuid())
+  token     String   @unique // Token único para acesso público
+  expiresAt DateTime // Data de expiração
+  used      Boolean  @default(false) // Se o token já foi usado
+
+  // Relations
+  doctorPatientId String @unique
+  doctorPatient   DoctorPatient @relation(fields: [doctorPatientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("patient_form_tokens")
+}
+
+// 🦷 PatientTeeth (Arca Dentária - Histórico por dente)
+model PatientTeeth {
+  id                 String   @id @default(cuid())
+  doctorPatientId    String   // Relação com DoctorPatient
+  appointmentId      String?  // Consulta onde foi realizado o procedimento
+  procedureId        String?  // Procedimento realizado
+  
+  // Numeração dos dentes
+  toothNumberSite    Int      // 1-32 (numeração do site)
+  toothNumberFDI     String   // Ex: "11", "21", "31", "41"
+  
+  // Dados do procedimento
+  treatmentType      String   // "extração", "obturação", "limpeza", etc.
+  notes              String?  // Observações sobre o procedimento
+  status             String   @default("ACTIVE") // ACTIVE, EXTRACTED, etc.
+  
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  
+  // Relations
+  doctorPatient      DoctorPatient @relation(fields: [doctorPatientId], references: [id], onDelete: Cascade)
+  appointment        Appointment?  @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  procedure          Procedure?    @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+  
+  @@map("patient_teeth")
+}
